@@ -1,0 +1,44 @@
+{% extends "base.html" %}{% macro csrf_field() %}<input type="hidden" name="csrf" value="{{csrf}}">{% endmacro %}
+{% macro action(name,label,disabled=false,primary=false) %}<form method="post" action="/projects/{{pid}}/{{name}}">{{csrf_field()}}<button {% if disabled or busy %}disabled{% endif %} class="{{'primary' if primary else ''}}">{{label}}</button></form>{% endmacro %}
+{% block content %}
+<a class="back" href="/">← All projects</a><div class="section-title"><div><span class="eyebrow">PROJECT STUDIO</span><h1>{{project.name}}</h1><p class="lead">{{project.product_name}}</p></div><span class="pill">{{project.status.replace('_',' ')}}</span></div>
+<nav class="steps"><a href="#facts">01 Facts</a><a href="#shots">02 Shot plan</a><a href="#generate">03 Generate</a><a href="#export">04 Export</a></nav>
+<div class="notice"><b>Manual review required.</b> AI may alter product details or invent visual claims. Technical QC cannot detect these errors.</div>
+<div class="metrics"><div><small>PROVIDER</small><b>{{provider.provider}}</b></div><div><small>MODEL</small><b>{{provider.model or 'Unverified'}}</b></div><div><small>GENERATION PLAN</small><b>1 test + 6 clips</b></div><div><small>ESTIMATED COST</small><b>{{'0 · mock only' if provider.provider=='mock' else 'Unknown · blocked'}}</b></div></div>
+{% if project.error_message %}<p class="warning">{{project.error_message}}</p>{% endif %}
+{% if not provider.ready %}<p class="warning">{{provider.reason}}</p>{% endif %}
+<section class="panel" id="facts"><div class="section-title"><div><span class="eyebrow">01 · EVIDENCE FIRST</span><h2>Product facts</h2></div><span class="pill">{{'Approved' if project.facts_approved else 'Review needed'}}</span></div>
+<p>Source: <a href="{{project.source_url}}" target="_blank" rel="noreferrer">{{project.source_url}}</a></p><p class="muted">Enter evidenced identity facts using <code>color:</code>, <code>shape:</code>, <code>size:</code>, <code>accessories:</code>. “Verified” requires a source and review notes. Only verified facts enter prompts.</p>
+{{action('brief','Generate fact sheet & brief')}}{% if project.brief %}<pre>{{project.brief}}</pre>{% endif %}
+{% for f in facts %}<details class="fact"><summary><span class="pill {{'good' if f.verification_status=='verified' else 'attention'}}">{{f.verification_status}}</span> {{f.fact}}</summary>
+<form method="post" action="/projects/{{pid}}/fact">{{csrf_field()}}<input type="hidden" name="fact_id" value="{{f.id}}">
+<label>Fact<input name="fact" value="{{f.fact}}" required></label><label>Evidence source<input name="source" value="{{f.source}}"></label>
+<label>Status<select name="verification_status">{% for status in ['verified','seller_claim','unverified','prohibited'] %}<option {% if status==f.verification_status %}selected{% endif %}>{{status}}</option>{% endfor %}</select></label>
+<label>Review notes<textarea name="notes">{{f.notes}}</textarea></label><button {% if busy %}disabled{% endif %}>Save fact</button></form></details>{% endfor %}
+<details class="fact" open><summary>Add a fact</summary><form method="post" action="/projects/{{pid}}/fact">{{csrf_field()}}
+<div class="row"><label>Fact<input name="fact" required placeholder="color: blue"></label><label>Evidence source<input name="source" placeholder="Product label / image / exact source"></label></div>
+<div class="row"><label>Classification<select name="verification_status"><option>unverified</option><option>seller_claim</option><option>verified</option><option>prohibited</option></select></label><label>Evidence review notes<input name="notes" placeholder="What did you check?"></label></div>
+<button {% if busy %}disabled{% endif %}>Add fact</button></form></details>
+<div class="actions">{{action('approve-facts','Approve verified facts',false,true)}}{{action('prompts','Generate seven prompts',not project.facts_approved)}}</div></section>
+<section class="panel"><h2>Reference images & audio</h2><p class="muted">Mock does not use reference images. gflow model capabilities are unverified. Product identity is never guaranteed.</p>
+<div class="thumbnails">{% for ref in refs %}<img src="/projects/{{pid}}/files/references/{{ref}}" alt="Product reference image">{% endfor %}</div>
+<form method="post" action="/projects/{{pid}}/upload" enctype="multipart/form-data">{{csrf_field()}}<div class="row"><label>Input type<select name="kind"><option value="reference">Product image</option><option value="voiceover">Local voiceover</option><option value="subtitle">UTF-8 SRT subtitles</option></select></label><label>File<input type="file" name="file" required accept=".jpg,.jpeg,.png,.webp,.wav,.mp3,.m4a,.srt"></label></div><button {% if busy %}disabled{% endif %}>Upload</button></form>
+<p class="muted">Voiceover: {{'Added' if project.voiceover_path else 'None'}} · Subtitles: {{'Added' if project.subtitle_path else 'None'}}. Images invalidate prompts; audio/subtitles require reassembly.</p></section>
+<section class="panel" id="shots"><div class="section-title"><div><span class="eyebrow">02 · CREATIVE DIRECTION</span><h2>Seven shots. One story.</h2></div><span class="pill">{{'Approved' if project.prompts_approved else 'Review needed'}}</span></div>
+{% for shot in shots %}<details class="shot"><summary><span class="shot-number">{{'%02d'|format(shot.shot_number)}}</span><b>{{shot.role.replace('_',' ')|title}}</b><span class="pill">{{shot.status}}</span></summary>
+<form method="post" action="/projects/{{pid}}/shot">{{csrf_field()}}<input type="hidden" name="shot_id" value="{{shot.id}}"><label>Prompt<textarea class="prompt" name="prompt" required>{{shot.prompt}}</textarea></label><label>Negative prompt<textarea name="negative_prompt">{{shot.negative_prompt}}</textarea></label><button {% if busy %}disabled{% endif %}>Save & invalidate approvals</button></form>
+{% if shot.clip_path %}<video controls preload="metadata" src="/projects/{{pid}}/files/clips/{{shot.clip_path.replace('\\','/').split('/')[-1]}}"></video>{% endif %}
+{% if shot.error_message %}<p class="warning">{{shot.error_message}}</p>{% endif %}<p class="muted">Operation: {{shot.operation_id or 'Not submitted'}}</p></details>{% else %}<p class="empty">Approve the product facts to generate the shot plan.</p>{% endfor %}
+{{action('approve-prompts','Approve all seven prompts',not shots,true)}}</section>
+<section class="panel" id="generate"><span class="eyebrow">03 · TEST BEFORE BATCH</span><h2>Make the first frame count.</h2><p>{{provider.reason}}</p>
+<div class="actions">{{action('generate-test','Generate 1 test clip',not project.prompts_approved or not provider.ready,true)}}{{action('approve-test','I reviewed & approve the test clip',not shots or shots[0].status!='complete')}}{{action('generate-batch','Generate remaining clips',not project.test_approved or not provider.ready)}}</div>
+{% if busy %}<p class="notice">Job running. This page refreshes every four seconds.</p>{% endif %}
+{% if jobs %}<div class="table-wrap"><table><thead><tr><th>Job</th><th>Provider / model</th><th>Status</th><th>Operation</th><th>Retries / error</th></tr></thead><tbody>{% for j in jobs %}<tr><td>{{j.id[:8]}}</td><td>{{j.provider}} / {{j.model}}</td><td>{{j.status}}</td><td class="mono">{{j.operation_id or '—'}}</td><td>{{j.retry_count}} {{j.error_message}}</td></tr>{% endfor %}</tbody></table></div>{% endif %}</section>
+<section class="panel" id="export"><span class="eyebrow">04 · FINISH WITH CONFIDENCE</span><h2>Assemble, review, export.</h2><div class="actions">{{action('assemble','Assemble portrait MP4',not ready,true)}}{{action('qc','Run technical QC',not project.assembled_current)}}{{action('export','Create review package',not project.assembled_current)}}</div>
+{% if project.assembled_current %}<div class="export-grid"><video controls preload="metadata" src="/projects/{{pid}}/files/exports/final-reel.mp4"></video><div><a class="button" href="/projects/{{pid}}/files/exports/final-reel.mp4" download>Download MP4</a>
+{% if qc %}<a class="button" href="/projects/{{pid}}/files/exports/qc-report.json">QC report JSON</a><p>{{qc[0].width}} × {{qc[0].height}} · {{'%.1f'|format(qc[0].duration)}} seconds · Audio {{'yes' if qc[0].has_audio else 'no'}}</p>{% endif %}
+{% if project.status=='exported' %}<a class="button primary" href="/projects/{{pid}}/files/exports/project-package.zip">Download project package</a>{% endif %}</div></div>{% endif %}
+<h3>Visual review checklist</h3><form method="post" action="/projects/{{pid}}/review">{{csrf_field()}}<div class="checklist">{% for item in checklist %}<label><input type="checkbox" name="items" value="{{item}}" {% if item in reviewed %}checked{% endif %}>{{item}}</label>{% endfor %}</div><button {% if busy %}disabled{% endif %}>Save review checklist</button></form>
+<p class="muted">Export is a review package, not publication approval. Upload to TikTok / Shopee / Facebook yourself after review.</p></section>
+{% endblock %}
+

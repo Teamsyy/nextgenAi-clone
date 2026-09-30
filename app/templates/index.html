@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block content %}
+<div class="hero"><div><span class="eyebrow">YOUR CONTENT WORKSPACE</span><h1>From product.<br>To possibility.</h1><p class="lead">Review the facts. Shape seven shots.<br>Build a reel you can stand behind.</p></div><div class="hero-card"><span class="orb"></span><span class="eyebrow">PRODUCTION AT A GLANCE</span><strong>{{projects|length}}</strong><p>projects in your studio</p><div class="line"></div><b>{{provider.model or 'Model unverified'}}</b><p>{{provider.reason}}</p></div></div>
+<div class="layout"><section><div class="section-title"><h2>Projects</h2><span class="muted">Your next story starts here</span></div>
+{% for p in projects %}<a class="project-card" href="/projects/{{p.id}}"><div class="project-icon">{{loop.index|string}}</div><div><h3>{{p.name}}</h3><p>{{p.product_name}}</p></div><span class="pill">{{p.status.replace('_',' ')}}</span><span>↗</span></a>{% else %}<div class="empty"><h3>A clean canvas.</h3><p>Add your first product to start a reviewed, seven-shot video project.</p></div>{% endfor %}</section>
+<section class="panel"><span class="eyebrow">START SOMETHING</span><h2>New project</h2><form method="post" action="/projects"><input type="hidden" name="csrf" value="{{csrf}}">
+<label>Project name<input name="name" required maxlength="120" placeholder="October product story"></label>
+<label>Exact product name<input name="product_name" required maxlength="200" placeholder="Brand · model · variant"></label>
+<label>Original source URL<input name="source_url" type="url" required placeholder="https://…" maxlength="2000"></label>
+<label>Benefits supplied by seller<textarea name="benefits" placeholder="One per line. These are not verified facts." maxlength="5000"></textarea></label>
+<label>Target audience<input name="target_audience" placeholder="Who is this for?" maxlength="500"></label>
+<div class="row"><label>Language<select name="language"><option value="th">Thai · ไทย</option><option value="en">English</option></select></label><label>Tone<select name="tone"><option>friendly</option><option>calm</option><option>energetic</option></select></label></div>
+<button class="primary full">Create project <span>→</span></button></form></section></div>
+{% endblock %}
+

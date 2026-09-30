@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>nextgen-local · Content studio</title><link rel="stylesheet" href="/static/style.css">
+{% if busy %}<meta http-equiv="refresh" content="4">{% endif %}</head>
+<body><header><a class="brand" href="/"><span class="brand-icon">n</span>nextgen<span class="muted">/ local</span></a><span class="tag">{{provider.provider | upper}} WORKSPACE</span></header>
+<main>{% block content %}{% endblock %}</main>
+<footer>Local-first content studio · Manual review required before publication · No automatic posting</footer>
+</body></html>
+
