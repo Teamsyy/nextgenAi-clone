@@ -15,4 +15,6 @@ def test_ui_creation_and_csrf(tmp_path):
         assert "Manual review" in r.text
         assert client.get("/",headers={"host":"evil.example"}).status_code == 400
         assert client.post("/projects",headers={"origin":"https://evil.example"},data={"csrf":token}).status_code == 403
+        r_origin = client.post("/projects",headers={"origin":"http://localhost"},data={"csrf":token,"name":"Loopback UI","product_name":"Cup","source_url":"https://example.com","benefits":"","target_audience":"Adults","language":"th","tone":"friendly"})
+        assert r_origin.status_code == 200
 

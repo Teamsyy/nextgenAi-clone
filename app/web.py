@@ -42,8 +42,21 @@ def create_app(settings=None):
     async def local_guard(request,call_next):
         if request.method=="POST":
             origin=request.headers.get("origin")
-            if origin and origin!=str(request.base_url).rstrip("/"):
-                return HTMLResponse("Origin rejected",status_code=403)
+            referer=request.headers.get("referer")
+            host=request.headers.get("host","").split(":")[0].lower()
+            loopback={"localhost","127.0.0.1","::1","testserver"}
+            if origin and origin!="null":
+                from urllib.parse import urlsplit
+                u=urlsplit(origin)
+                orig_host=(u.hostname or "").lower()
+                if orig_host not in loopback and orig_host!=host:
+                    return HTMLResponse("Origin rejected",status_code=403)
+            elif origin=="null" and referer:
+                from urllib.parse import urlsplit
+                ref_u=urlsplit(referer)
+                ref_host=(ref_u.hostname or "").lower()
+                if ref_host not in loopback and ref_host!=host:
+                    return HTMLResponse("Origin rejected",status_code=403)
             try:
                 size=int(request.headers.get("content-length","-1"))
             except ValueError:
