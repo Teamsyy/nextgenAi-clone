@@ -1,8 +1,8 @@
 # nextgen-local
 
-A local product-fact and seven-shot content studio. FastAPI + Jinja2, SQLite/SQLAlchemy, Pydantic settings and FFmpeg. No automatic publishing.
+A local product-fact and single-shot UGC video studio. FastAPI + Jinja2, SQLite/SQLAlchemy, Pydantic settings and FFmpeg. No automatic publishing.
 
-**Implemented:** editable fact review, prompt review, test-before-batch approvals, seven real synthetic mock MP4s, portrait assembly, local voiceover, soft subtitles, technical QC and ZIP export, UI and CLI.
+**Implemented:** editable fact review, prompt review, one synthetic mock UGC clip, explicit clip approval, portrait assembly, local voiceover, soft subtitles, technical QC and ZIP export, UI and CLI.
 
 **Not yet implemented:** live Flow generation through gflow-cli. The gflow backend is an explicit fail-closed readiness boundary, NOT a working video integration. Installing gflow does not enable spending. Do not present mock output as AI product footage.
 
@@ -57,7 +57,7 @@ The requested /home/teamsy/flow-content-pipeline was not present, so its four so
 python -m app demo
 ```
 
-This creates a synthetic sample, approves fixture facts and prompts, generates one test, approves that mock test, generates six more, assembles a 56-second portrait reel, runs QC and exports a package. It refuses to run when VIDEO_PROVIDER is not mock. Normal UI/CLI workflows require explicit approvals.
+This creates a synthetic sample, approves fixture facts and prompts, generates one mock clip, assembles an 8-second portrait video, runs QC and exports a package. It refuses to run when VIDEO_PROVIDER is not mock. Normal UI/CLI workflows require explicit approvals.
 
 ```sh
 python -m app create-project --name "Cup reel" --product-name "Blue Cup" --source-url "https://example.com/cup" --target-audience "Office workers"
@@ -71,8 +71,8 @@ python -m app generate-prompts --project PROJECT_ID
 python -m app approve-prompts --project PROJECT_ID
 python -m app generate-test --project PROJECT_ID
 # Inspect clip-01-hook.mp4, then explicitly approve:
+# Inspect the current clip in the UI before approving it:
 python -m app approve-test --project PROJECT_ID
-python -m app generate-batch --project PROJECT_ID
 python -m app assemble --project PROJECT_ID
 python -m app qc --project PROJECT_ID
 python -m app export --project PROJECT_ID
@@ -102,7 +102,7 @@ projects/PROJECT_ID/exports/project-package.zip
 
 QC verifies nonempty output, video/audio requirements, positive duration, portrait dimensions, codec information and ffprobe readability; FFmpeg additionally decodes the streams. Visual review remains required: shape/color, logo spelling, extra parts, hands/faces, fake text, claims, continuity and CTA.
 
-ZIP includes final reel, seven clips, original source URL/manifest, facts with evidence, prompts, Thai text drafts, QC and a review checklist. It is a review package, not publication approval.
+ZIP includes the final reel, current clip(s), original source URL/manifest, facts with evidence, prompts, Thai text drafts, QC and a review checklist. Current projects generate one UGC clip; manifests still accept a complete seven-shot legacy package. It is a review package, not publication approval.
 
 ## Flow credits and gflow-cli
 
@@ -150,3 +150,4 @@ python -m app demo
 
 The suite includes a real FFmpeg/ffprobe integration run; neither command calls an external generation API. Exact verification results and file inventory are recorded in docs/verification.md.
 
+# nextgenAi-clone
