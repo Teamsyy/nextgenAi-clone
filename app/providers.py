@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import shutil
+import json
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 from typing import Protocol
@@ -90,10 +91,18 @@ class MockVideoProvider:
         return Path(destination)
 
 class GFlowProvider:
-    capabilities={"supports_reference_images":None,"supports_audio":None,"supports_extension":None}
-    model="unverified"
-    def __init__(self,root):
+    capabilities={"supports_reference_images":True,"supports_audio":None,"supports_extension":False}
+    model="veo-lite"
+    def __init__(self,root,timeout=600):
         self.root=Path(root)
+        self.timeout=timeout
+        configured=os.getenv("GFLOW_EXECUTABLE")
+        self.executable=(shutil.which(configured) if configured else None) or shutil.which("gflow")
+        if not self.executable and os.name=="nt":
+            candidate=Path.home()/".gflow-venv"/"Scripts"/"gflow.exe"
+            if candidate.is_file():
+                self.executable=str(candidate)
+        self.outputs={}
     def readiness(self):
         try:
             installed=version("gflow-cli")
@@ -101,16 +110,72 @@ class GFlowProvider:
             installed=None
         return {
             "provider":"gflow","installed_version":installed,
-            "executable_found": bool(shutil.which("gflow")),
-            "ready":False, "account_verified":False, "credits":None,
-            "estimated_cost":None, "model":None,
-            "reason":"Live generation blocked: audited non-bypass browser path and live account, Pro/Ultra subscription, model and credit-cost verification are not implemented. Upstream credit lookup reports limitations for flow.google.com.",
-            "documentation":"https://github.com/ffroliva/gflow-cli/blob/develop/KNOWN_ISSUES.md"
+            "executable_found": bool(self.executable),
+            "ready":bool(self.executable), "account_verified":False, "credits":None,
+            "estimated_cost":None, "model":self.model if self.executable else None,
+            "reason":"สร้างผ่าน gflow-cli · ตรวจสอบเครดิตใน Google Flow ก่อนสร้างคลิป" if self.executable else "ไม่พบ gflow CLI กรุณาติดตั้ง gflow-cli หรือกำหนด GFLOW_EXECUTABLE",
+            "documentation":"https://github.com/ffroliva/gflow-cli"
         }
-    async def generate_video(self,prompt,destination):
-        raise ProviderError(self.readiness()["reason"])
+    async def generate_video(self,prompt,destination,reference_images=None,project_name=""):
+        if not self.executable:
+            raise ProviderError(self.readiness()["reason"])
+        images=[Path(x).resolve() for x in (reference_images or [])]
+        if not 1<=len(images)<=3 or any(not x.is_file() for x in images):
+            raise ProviderError("เลือกภาพอ้างอิงสินค้า 1–3 ภาพก่อนสร้างคลิป")
+        destination=Path(destination).resolve()
+        if destination.exists():
+            raise ProviderError("ไฟล์ปลายทางมีอยู่แล้ว; ป้องกันการใช้คลิปเก่าซ้ำ")
+        mode="i2v" if len(images)==1 else "r2v"
+        args=[self.executable,"video",mode]
+        if mode=="i2v":
+            args.extend(["--initial-frame",str(images[0]),prompt])
+        else:
+            args.append(prompt)
+            for image in images:
+                args.extend(["--ref",str(image)])
+        # Veo Lite defaults to 8 seconds in Flow; omitting duration supports
+        # migrated accounts whose composer exposes no duration selector.
+        args.extend(["--model","veo-lite","--aspect","9:16",
+                     "--count","1","--ui-mode","classic","--project-name",project_name[:120],
+                     "--output",str(destination),"--json"])
+        proc=None
+        try:
+            proc=await asyncio.create_subprocess_exec(*args,stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL)
+            stdout,_=await asyncio.wait_for(proc.communicate(),self.timeout)
+        except asyncio.TimeoutError as exc:
+            if proc and proc.returncode is None:
+                proc.kill()
+                await proc.communicate()
+            raise TimeoutError("gflow timed out; check Flow before submitting again") from exc
+        except OSError as exc:
+            raise ProviderError("Could not start gflow video command") from exc
+        try:
+            result=json.loads(stdout.decode("utf-8"))
+        except (UnicodeDecodeError,ValueError) as exc:
+            raise TimeoutError("gflow returned no readable result; check Flow before submitting again") from exc
+        detail=result.get("error",{}).get("detail","")
+        if (proc.returncode==11 or result.get("exit_code")==11
+                or "renders no duration control" in detail):
+            raise ProviderError(redact(detail) if detail else "gflow rejected the request before submission")
+        if proc.returncode or result.get("status")!="ok":
+            message=redact(detail) if detail else "gflow did not confirm a completed video"
+            raise TimeoutError(f"{message}; check Flow before submitting again")
+        if not destination.is_file() or destination.stat().st_size==0:
+            raise ProviderError("gflow generation completed without a local video file")
+        operation_id="gflow-"+uuid4().hex
+        self.outputs[operation_id]=(destination,destination)
+        return operation_id
     async def get_operation_status(self,operation_id):
-        raise ProviderError(self.readiness()["reason"])
+        if operation_id not in self.outputs:
+            raise ProviderError("Unknown gflow MCP operation")
+        return {"done":True}
     async def download_video(self,operation_id,destination):
-        raise ProviderError(self.readiness()["reason"])
+        if operation_id not in self.outputs:
+            raise ProviderError("Unknown gflow MCP operation")
+        source,_=self.outputs[operation_id]
+        destination=Path(destination)
+        if source.resolve()!=destination.resolve():
+            shutil.copyfile(source,destination)
+        return destination
 

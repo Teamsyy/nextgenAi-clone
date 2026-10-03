@@ -1,7 +1,8 @@
 import re
 
-ROLES=["hook","product_demo","lifestyle","detail","benefit","proof","cta"]
+ROLES=["ugc_showcase"]
 DIRECTIONS={
+"ugc_showcase":"Authentic handheld UGC product demo: one single hand gently holds, tilts and smoothly turns the product to showcase its design, logo and details over a cozy soft background. Steady gentle movement, authentic TikTok creator review, completely silent, strictly no second hand, strictly no face.",
 "hook":"Reveal the product on a simple table; slow camera push-in.",
 "product_demo":"Hand-held product demo, gently rotate the product; steady close camera tracking.",
 "lifestyle":"Show the product in an everyday setting without implying undocumented use; gentle lateral pan.",

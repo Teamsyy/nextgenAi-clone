@@ -26,7 +26,7 @@ def parser():
     fact.add_argument("--status",choices=["verified","seller_claim","unverified","prohibited"],default="unverified")
     fact.add_argument("--notes",default="")
     for name in ("show","generate-brief","approve-facts","generate-prompts","approve-prompts",
-                 "generate-test","approve-test","generate-batch","assemble","qc","export"):
+                 "generate-test","approve-test","assemble","qc","export"):
         c=sub.add_parser(name)
         c.add_argument("--project",required=True)
         if name=="assemble":
@@ -53,7 +53,6 @@ async def demo(wf):
     wf.approve_facts(p.id); wf.generate_prompts(p.id); wf.approve_prompts(p.id)
     await wf.generate(p.id)
     wf.approve_test(p.id)
-    await wf.generate(p.id,batch=True)
     final=await asyncio.to_thread(wf.assemble,p.id)
     package=await asyncio.to_thread(wf.export,p.id)
     return dict(project_id=p.id,final=str(final),package=str(package),qc=wf.qc(p.id),
@@ -98,9 +97,9 @@ def main(argv=None):
             d=wf.detail(args.project)
             emit({key: [ {c.name:getattr(row,c.name) for c in row.__table__.columns} for row in val] if isinstance(val,list)
                 else {c.name:getattr(val,c.name) for c in val.__table__.columns} for key,val in d.items()})
-        elif args.command in {"generate-test","generate-batch"}:
+        elif args.command=="generate-test":
             emit(wf.provider_info())
-            asyncio.run(wf.generate(args.project,batch=args.command=="generate-batch"))
+            asyncio.run(wf.generate(args.project))
             emit({"status":wf.detail(args.project)["project"].status})
         elif args.command=="assemble":
             for kind,path in (("voiceover",args.voiceover),("subtitle",args.subtitles)):

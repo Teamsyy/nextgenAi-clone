@@ -40,21 +40,21 @@ def test_missing_identity_blocks_prompts(wf):
     with pytest.raises(ValueError):
         wf.approve_facts(p.id)
 
-def test_seven_prompts_use_approved_facts_only(wf):
+def test_ugc_prompt_uses_approved_facts_only(wf):
     p = approved(wf)
     shots = wf.detail(p.id)["shots"]
-    assert [s.role for s in shots] == ["hook","product_demo","lifestyle","detail","benefit","proof","cta"]
-    assert len(shots) == 7
+    assert [s.role for s in shots] == ["ugc_showcase"]
+    assert len(shots) == 1
     for s in shots:
         assert "Blue cup" in s.prompt and "300 ml" in s.prompt
         assert "9:16" in s.prompt and "8-second" in s.prompt
         assert "Keeps water cold" not in s.prompt
         assert "no fake text" in s.prompt
 
-def test_batch_is_blocked_before_test_approval(wf):
+def test_test_clip_cannot_be_approved_before_it_exists(wf):
     p = approved(wf)
     with pytest.raises(ValueError, match="test"):
-        asyncio.run(wf.generate(p.id, batch=True))
+        wf.approve_test(p.id)
 
 def test_edits_invalidate_approvals(wf):
     p = approved(wf)

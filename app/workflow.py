@@ -117,7 +117,7 @@ class Workflow:
                         verification_status=classify(line,p.source_url,"seller_claim",""),
                         notes="User supplied benefit; not independently verified."))
             p.brief=(f"Product: {p.product_name}\nAudience: {p.target_audience}\nLanguage: {p.language}\nTone: {p.tone}\n"
-                     "7 shots x 8 seconds; portrait 9:16. Use only facts manually verified with evidence. "
+                     f"{len(ROLES)} UGC shot x 8 seconds; portrait 9:16. Use only facts manually verified with evidence. "
                      "Unsupported claims must not appear. Thai narration/subtitles remain editable drafts.")
             self._invalidate(s,p,True)
             return p.brief
@@ -149,12 +149,15 @@ class Workflow:
                 s.execute(delete(Shot).where(Shot.project_id==pid))
                 shots=[]
             for n,role in enumerate(ROLES,1):
-                shot=shots[n-1] if shots else Shot(project_id=pid,shot_number=n,role=role)
+                shot=shots[n-1] if len(shots)>=n else Shot(project_id=pid,shot_number=n,role=role)
                 shot.prompt=prompt_for(p.product_name,facts,role,p.target_audience,p.tone)
                 shot.negative_prompt=NEGATIVE
                 s.add(shot)
+            if len(shots)>len(ROLES):
+                for excess in shots[len(ROLES):]:
+                    s.delete(excess)
             self._invalidate(s,p)
-            return 7
+            return len(ROLES)
 
     def edit_shot(self,pid,shot_id,prompt,negative):
         if not prompt.strip() or len(prompt)>12000 or len(negative)>3000:
@@ -176,8 +179,8 @@ class Workflow:
             if not p.facts_approved:
                 raise ValueError("Approve facts first")
             shots=list(s.scalars(select(Shot).where(Shot.project_id==pid).order_by(Shot.shot_number)))
-            if len(shots)!=7 or any(not shot.prompt.strip() for shot in shots):
-                raise ValueError("Generate all seven prompts first")
+            if len(shots)!=len(ROLES) or any(not shot.prompt.strip() for shot in shots):
+                raise ValueError("Generate creative prompt first")
             facts=list(s.scalars(select(ProductFact).where(ProductFact.project_id==pid,ProductFact.approved==True)))
             for shot in shots:
                 check_sensitive_claims(shot.prompt, facts, shot.role)
@@ -207,21 +210,22 @@ class Workflow:
     def can_assemble(self,pid):
         d=self.detail(pid)
         return (d["project"].facts_approved and d["project"].prompts_approved and d["project"].test_approved
-                and len(d["shots"])==7 and all(s.status=="complete" and Path(s.clip_path).is_file() for s in d["shots"]))
+                and len(d["shots"])==len(ROLES) and all(s.status=="complete" and Path(s.clip_path).is_file() for s in d["shots"]))
 
-    async def generate(self,pid,batch=False):
-        provider=MockVideoProvider(self.root,self.settings.ffmpeg) if self.settings.video_provider=="mock" else GFlowProvider(self.root)
+    async def generate(self,pid,reference_images=None):
+        provider=MockVideoProvider(self.root,self.settings.ffmpeg) if self.settings.video_provider=="mock" else GFlowProvider(self.root,self.settings.operation_timeout)
+        if self.settings.video_provider=="gflow":
+            refs=self.directory(pid)/"references"
+            names=reference_images or []
+            if not 1<=len(names)<=7 or any(Path(name).name!=name or Path(name).suffix.lower() not in {".jpg",".jpeg",".png",".webp"} or not (refs/name).is_file() for name in names):
+                raise ValueError("เลือกรูปอ้างอิงที่อัปโหลดไว้ในโปรเจกต์ 1–3 รูปสำหรับ Veo Lite")
+            reference_images=[refs/name for name in dict.fromkeys(names)]
         with self.transaction() as s:
             p=self._project(s,pid,True)
             if not p.facts_approved or not p.prompts_approved:
                 raise ValueError("Approve facts and prompts first")
-            if batch and not p.test_approved:
-                raise ValueError("Approve the current test clip before batch generation")
-            if self.settings.video_provider=="gflow":
-                raise ValueError(provider.readiness()["reason"])
             shots=list(s.scalars(select(Shot).where(Shot.project_id==pid).order_by(Shot.shot_number)))
-            selected=shots[1:] if batch else shots[:1]
-            selected=[x for x in selected if x.status!="complete"]
+            selected=[x for x in shots[:1] if x.status!="complete"]
             if any(x.status=="indeterminate" for x in selected):
                 raise ValueError("An indeterminate submission requires reconciliation; automatic resubmission blocked")
             if not selected:
@@ -229,19 +233,23 @@ class Workflow:
             p.status="generating"
             p.error_message=""
             shot_ids=[x.id for x in selected]
+            project_name=p.name
         current_job=None
         try:
             for sid in shot_ids:
                 with self.transaction() as s:
                     shot=s.get(Shot,sid)
                     job=GenerationJob(project_id=pid,shot_id=sid,provider=self.settings.video_provider,
-                        model=provider.model,status="submitting",estimated_cost=0)
+                        model=provider.model,status="submitting",estimated_cost=0 if self.settings.video_provider=="mock" else None)
                     s.add(job); s.flush()
                     current_job=job.id
                     shot.status="generating"
                     prompt=shot.prompt
                     path=self.directory(pid)/"clips"/f"clip-{shot.shot_number:02}-{shot.role.replace('_','-')}.mp4"
-                op=await asyncio.wait_for(provider.generate_video(prompt,path),self.settings.operation_timeout)
+                if self.settings.video_provider=="gflow":
+                    op=await asyncio.wait_for(provider.generate_video(prompt,path,reference_images,project_name),self.settings.operation_timeout)
+                else:
+                    op=await asyncio.wait_for(provider.generate_video(prompt,path),self.settings.operation_timeout)
                 with self.transaction() as s:
                     s.get(GenerationJob,current_job).operation_id=op
                     s.get(GenerationJob,current_job).status="polling"
@@ -258,10 +266,12 @@ class Workflow:
                 with self.transaction() as s:
                     shot=s.get(Shot,sid); shot.status="complete"; shot.clip_path=str(path)
                     shot.duration_seconds=float(info["format"]["duration"])
-                    job=s.get(GenerationJob,current_job); job.status="complete"; job.completed_at=now(); job.actual_cost_if_available=0
+                    job=s.get(GenerationJob,current_job); job.status="complete"; job.completed_at=now()
+                    if self.settings.video_provider=="mock":
+                        job.actual_cost_if_available=0
             with self.transaction() as s:
                 p=self._project(s,pid)
-                p.status="clips_ready" if batch else "test_review"
+                p.status="test_review"
         except BaseException as exc:
             message=redact(exc)
             with self.transaction() as s:
@@ -278,14 +288,18 @@ class Workflow:
             p=self._project(s,pid,True)
             shots=list(s.scalars(select(Shot).where(Shot.project_id==pid).order_by(Shot.shot_number)))
             if not (p.facts_approved and p.prompts_approved and p.test_approved
-                    and len(shots)==7 and all(sh.status=="complete" and Path(sh.clip_path).is_file() for sh in shots)):
-                raise ValueError("Seven current clips and test approval required")
+                    and len(shots)==len(ROLES) and all(sh.status=="complete" and Path(sh.clip_path).is_file() for sh in shots)):
+                raise ValueError("Approved clips and test approval required")
             p.status="assembling"
             voice=p.voiceover_path; subtitle=p.subtitle_path
         try:
             clips=[Path(x.clip_path) for x in self.detail(pid)["shots"]]
-            out=media.assemble(clips,self.directory(pid)/"exports"/"final-reel.mp4",
-                               self.settings.ffmpeg,self.settings.ffprobe,voice or None,subtitle or None)
+            final_out=self.directory(pid)/"exports"/"final-reel.mp4"
+            refs=self.directory(pid)/"references"
+            font_path=refs/"Mali-SemiBold.ttf"
+            out=media.assemble(clips,final_out,self.settings.ffmpeg,self.settings.ffprobe,
+                               voice or None,subtitle or None,title=media.short_product_title(p.product_name),
+                               font_path=font_path if font_path.is_file() else None)
             with self.transaction() as s:
                 p=self._project(s,pid)
                 p.status="assembled"
@@ -301,7 +315,7 @@ class Workflow:
             p=self._project(s,pid,True)
             shots=list(s.scalars(select(Shot).where(Shot.project_id==pid).order_by(Shot.shot_number)))
             if not p.assembled_current or not (p.facts_approved and p.prompts_approved and p.test_approved
-                    and len(shots)==7 and all(sh.status=="complete" and Path(sh.clip_path).is_file() for sh in shots)):
+                    and len(shots)==len(ROLES) and all(sh.status=="complete" and Path(sh.clip_path).is_file() for sh in shots)):
                 raise ValueError("Assemble current approved clips before QC")
             voice_required=bool(p.voiceover_path)
         path=self.directory(pid)/"exports"/"final-reel.mp4"
@@ -342,7 +356,7 @@ class Workflow:
             p=self._project(s,pid,True)
             shots=list(s.scalars(select(Shot).where(Shot.project_id==pid).order_by(Shot.shot_number)))
             if not p.assembled_current or not (p.facts_approved and p.prompts_approved and p.test_approved
-                    and len(shots)==7 and all(sh.status=="complete" and Path(sh.clip_path).is_file() for sh in shots)):
+                    and len(shots)==len(ROLES) and all(sh.status=="complete" and Path(sh.clip_path).is_file() for sh in shots)):
                 raise ValueError("Assemble current approved clips before export")
             prev_status=p.status
             p.status="exporting"
@@ -372,7 +386,7 @@ class Workflow:
             package=out/"project-package.zip"
             tmp_package=out/f"project-package.{uuid4().hex}.tmp"
             with zipfile.ZipFile(tmp_package,"w",zipfile.ZIP_DEFLATED) as z:
-                for name in ("final-reel.mp4","qc-report.json","manifest.json","facts.json","prompts.txt","caption-th.txt","narration-th.txt","review.json"):
+                for name in ("final-reel.mp4","thumbnail.jpg","qc-report.json","manifest.json","facts.json","prompts.txt","caption-th.txt","narration-th.txt","review.json"):
                     z.write(out/name,name)
                 for shot in d["shots"]:
                     z.write(shot.clip_path,"clips/"+Path(shot.clip_path).name)

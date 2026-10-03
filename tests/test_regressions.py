@@ -37,7 +37,6 @@ def test_voiceover_reassembly_and_subtitle_track(tmp_path):
     p=approved(wf)
     asyncio.run(wf.generate(p.id))
     wf.approve_test(p.id)
-    asyncio.run(wf.generate(p.id,batch=True))
     wf.assemble(p.id)
     voice=tmp_path/"voice.wav"
     run(["ffmpeg","-y","-f","lavfi","-i","sine=frequency=440:duration=2",str(voice)])
@@ -50,7 +49,7 @@ def test_voiceover_reassembly_and_subtitle_track(tmp_path):
     wf.assemble(p.id)
     report=wf.qc(p.id)
     assert report["passed"] and report["has_audio"]
-    assert 55<report["duration"]<58
+    assert 7<report["duration"]<9
     meta=probe(wf.directory(p.id)/"exports"/"final-reel.mp4")
     assert any(s["codec_type"]=="subtitle" for s in meta["streams"])
     package=wf.export(p.id)
@@ -72,15 +71,30 @@ def test_web_fact_edit_xss_upload_and_social_actions(tmp_path):
         assert c.post(f"/projects/{p.id}/upload",data={"csrf":csrf,"kind":"reference"},files={"file":("bad.jpg",b"not image","image/jpeg")}).status_code==400
         assert not list((wf.directory(p.id)/"references").iterdir())
 
-def test_gflow_rejection_is_exposed_without_job_submission(tmp_path):
+def test_gflow_requires_start_frame_without_job_submission(tmp_path):
     app=create_app(Settings(output_root=tmp_path,database_url=f"sqlite:///{tmp_path/'flow.db'}",video_provider="gflow"))
     p=approved(app.state.workflow)
     with TestClient(app,base_url="http://127.0.0.1") as c:
         page=c.get(f"/projects/{p.id}")
         csrf=re.search('name="csrf" value="([^"]+)"',page.text).group(1)
         r=c.post(f"/projects/{p.id}/generate-test",data={"csrf":csrf})
-        assert r.status_code==400 and "blocked" in r.text
+        assert r.status_code==400 and "เลือกรูปอ้างอิง" in r.text
         assert app.state.workflow.detail(p.id)["jobs"]==[]
+
+def test_multiple_reference_images_can_be_uploaded_at_once(tmp_path):
+    from io import BytesIO
+    from PIL import Image
+    from app.models import ProjectInput
+    app=create_app(Settings(output_root=tmp_path,database_url=f"sqlite:///{tmp_path/'multi-image.db'}"))
+    p=app.state.workflow.create(ProjectInput(name="Multi",product_name="Cup",source_url="https://example.com"))
+    image=BytesIO(); Image.new("RGB",(20,20),"white").save(image,"JPEG")
+    raw=image.getvalue()
+    with TestClient(app,base_url="http://127.0.0.1") as c:
+        page=c.get(f"/projects/{p.id}")
+        csrf=re.search('name="csrf" value="([^"]+)"',page.text).group(1)
+        response=c.post(f"/projects/{p.id}/upload",data={"csrf":csrf,"kind":"reference"},files=[("file",("one.jpg",raw,"image/jpeg")),("file",("two.jpg",raw,"image/jpeg"))])
+    assert response.status_code==200
+    assert len(list((app.state.workflow.directory(p.id)/"references").glob("*.jpg")))==2
 
 def test_withdrawn_facts_invalidates_prompts_and_cannot_survive(tmp_path):
     wf = Workflow(Settings(output_root=tmp_path, database_url=f"sqlite:///{tmp_path/'withdrawn.db'}"))
@@ -96,14 +110,14 @@ def test_withdrawn_facts_invalidates_prompts_and_cannot_survive(tmp_path):
     assert all(not s.prompt for s in wf.detail(p.id)["shots"])
 
     wf.approve_facts(p.id)
-    with pytest.raises(ValueError, match="seven prompts"):
+    with pytest.raises(ValueError, match="creative prompt"):
         wf.approve_prompts(p.id)
 
     wf.generate_prompts(p.id)
     wf.approve_prompts(p.id)
     assert not any("waterproof" in s.prompt for s in wf.detail(p.id)["shots"])
 
-def test_reapproving_prompts_preserves_completed_and_indeterminate_shots(tmp_path):
+def test_reapproving_prompts_preserves_completed_test_shot(tmp_path):
     wf = Workflow(Settings(output_root=tmp_path, database_url=f"sqlite:///{tmp_path/'preserve.db'}"))
     p = approved(wf)
     asyncio.run(wf.generate(p.id))
@@ -117,10 +131,8 @@ def test_reapproving_prompts_preserves_completed_and_indeterminate_shots(tmp_pat
     detail2 = wf.detail(p.id)
     assert detail2["shots"][0].status == "complete"
 
-    with wf.transaction() as s:
-        s.get(Shot, detail2["shots"][1].id).status = "indeterminate"
     wf.approve_prompts(p.id)
-    assert wf.detail(p.id)["shots"][1].status == "indeterminate"
+    assert wf.detail(p.id)["shots"][0].status == "complete"
 
 def test_export_reserves_project_and_blocks_mutations(tmp_path):
     wf = Workflow(Settings(output_root=tmp_path, database_url=f"sqlite:///{tmp_path/'export_busy.db'}"))
@@ -134,14 +146,29 @@ def test_export_reserves_project_and_blocks_mutations(tmp_path):
     with pytest.raises(ValueError, match="busy"):
         wf.export(p.id)
 
-def test_save_all_seven_default_prompts(tmp_path):
+def test_legacy_project_is_read_only_from_studio(tmp_path):
+    wf=Workflow(Settings(output_root=tmp_path,database_url=f"sqlite:///{tmp_path/'legacy.db'}"))
+    p=approved(wf)
+    with wf.transaction() as s:
+        s.add(Shot(project_id=p.id,shot_number=2,role="product_demo",prompt="Legacy",status="approved"))
+    app=create_app(Settings(output_root=tmp_path,database_url=f"sqlite:///{tmp_path/'legacy.db'}"))
+    with TestClient(app,base_url="http://127.0.0.1") as client:
+        page=client.get(f"/projects/{p.id}")
+        token=re.search('name="csrf" value="([^"]+)"',page.text).group(1)
+        assert "โปรเจกต์รูปแบบเดิม" in page.text
+        response=client.post(f"/projects/{p.id}/fact",data={"csrf":token,"fact":"color: red","source":"label"})
+    assert response.status_code==400
+    assert "เปิดดู/ดาวน์โหลดได้เท่านั้น" in response.text
+    assert len(wf.detail(p.id)["shots"])==2
+
+def test_save_default_ugc_prompt(tmp_path):
     wf = Workflow(Settings(output_root=tmp_path, database_url=f"sqlite:///{tmp_path/'default_prompts.db'}"))
     p = approved(wf)
     shots = wf.detail(p.id)["shots"]
-    assert len(shots) == 7
+    assert len(shots) == 1
     for shot in shots:
         wf.edit_shot(p.id, shot.id, shot.prompt, shot.negative_prompt)
-    proof_shot = [s for s in shots if s.role == "proof"][0]
-    assert "certifications" in proof_shot.prompt
+    assert shots[0].role == "ugc_showcase"
+    assert "Blue cup" in shots[0].prompt
 
 
